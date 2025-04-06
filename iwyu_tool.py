@@ -271,6 +271,8 @@ class Process(object):
     @classmethod
     def start(cls, invocation):
         """ Start a Process for the invocation and capture stdout+stderr. """
+        if not os.path.isdir(invocation.cwd):
+            return None
         outfile = tempfile.TemporaryFile(prefix='iwyu')
         process = subprocess.Popen(
             invocation.command,
@@ -317,6 +319,10 @@ class Invocation(object):
             extra_args = ['--driver-mode=cl'] + extra_args
 
         command = [IWYU_EXECUTABLE] + extra_args + compile_args
+        if not 'directory' in entry:
+            entry['directory'] = os.getcwd()
+        if not os.path.isdir(entry['directory']):
+            return None
         return cls(command, entry['directory'])
 
     def start(self, verbose):
@@ -330,6 +336,15 @@ class Invocation(object):
 def fixup_compilation_db(compilation_db):
     """ Canonicalize paths in JSON compilation database. """
     for entry in compilation_db:
+        if not 'file' in entry:
+            continue
+        if entry['file'] is None:
+            if 'directory' in entry and not os.path.isdir(entry['directory']):
+                entry['file'] = entry['directory']
+                del entry['directory']
+            else:
+                continue
+
         # Convert relative paths to absolute ones if possible, based on the entry's directory.
         if 'directory' in entry and not os.path.isabs(entry['file']):
             entry['file'] = os.path.join(entry['directory'], entry['file'])
@@ -391,6 +406,8 @@ def execute(invocations, verbose, formatter, jobs, max_load_average=0):
     if jobs == 1:
         for invocation in invocations:
             proc = invocation.start(verbose)
+            if proc is None:
+                continue
             print(formatter(proc.get_output()))
             exit_code = worst_exit_code(exit_code, proc.returncode)
         return exit_code
@@ -398,7 +415,7 @@ def execute(invocations, verbose, formatter, jobs, max_load_average=0):
     pending = []
     while invocations or pending:
         # Collect completed IWYU processes and print results.
-        complete = [proc for proc in pending if proc.poll() is not None]
+        complete = [proc for proc in pending if proc is not None and proc.poll() is not None]
         for proc in complete:
             pending.remove(proc)
             print(formatter(proc.get_output()))
@@ -456,6 +473,8 @@ def main(compilation_db_path, source_files, verbose, formatter, jobs,
     invocations = [
         Invocation.from_compile_command(e, extra_args) for e in compilation_db
     ]
+    while None in invocations:
+        invocations.remove(None)
 
     return execute(invocations, verbose, formatter, jobs, max_load_average)
 
